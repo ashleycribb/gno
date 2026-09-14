@@ -179,6 +179,7 @@ export const CollectionSchema = z.object({
       rerank: z.string().min(1).optional(),
       expand: z.string().min(1).optional(),
       gen: z.string().min(1).optional(),
+      dimensions: z.number().int().positive().optional(),
     })
     .optional(),
 
@@ -373,6 +374,8 @@ export const ModelPresetSchema = z.object({
   expand: z.string().min(1).optional(),
   /** Answer generation model URI */
   gen: z.string().min(1),
+  /** Target Matryoshka vector dimensions (e.g., 512) */
+  dimensions: z.number().int().positive().optional(),
 });
 
 export type ModelPreset = z.infer<typeof ModelPresetSchema>;

@@ -50,6 +50,37 @@ export function decodeEmbedding(blob: Uint8Array): Float32Array {
   return new Float32Array(copy.buffer, copy.byteOffset, copy.byteLength / 4);
 }
 
+/**
+ * Truncate Float32Array vector for Matryoshka Representation Learning (MRL)
+ * and re-normalize using L2 norm. Returns a new Float32Array of length `targetDimensions`.
+ */
+export function truncateAndNormalizeEmbedding(
+  f32: Float32Array,
+  targetDimensions: number
+): Float32Array {
+  if (targetDimensions <= 0 || targetDimensions > f32.length) {
+    return f32;
+  }
+  const truncated = new Float32Array(
+    f32.buffer,
+    f32.byteOffset,
+    targetDimensions
+  );
+  let normSq = 0;
+  for (let i = 0; i < targetDimensions; i++) {
+    normSq += truncated[i]! * truncated[i]!;
+  }
+  const norm = Math.sqrt(normSq);
+  if (norm === 0 || !Number.isFinite(norm)) {
+    return new Float32Array(truncated);
+  }
+  const normalized = new Float32Array(targetDimensions);
+  for (let i = 0; i < targetDimensions; i++) {
+    normalized[i] = truncated[i]! / norm;
+  }
+  return normalized;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
@@ -178,12 +209,16 @@ export async function createVectorIndexPort(
       db.transaction(() => {
         rows = checkpoint?.(rows) ?? rows;
         for (const row of rows) {
+          const formattedEmbedding =
+            dimensions > 0 && row.embedding.length > dimensions
+              ? truncateAndNormalizeEmbedding(row.embedding, dimensions)
+              : row.embedding;
           upsertVectorStmt.run(
             row.mirrorHash,
             row.seq,
             row.model,
             row.embedFingerprint,
-            encodeEmbedding(row.embedding)
+            encodeEmbedding(formattedEmbedding)
           );
         }
       })();
@@ -203,10 +238,14 @@ export async function createVectorIndexPort(
         db.transaction(() => {
           for (const row of rows) {
             const chunkId = `${row.mirrorHash}:${row.seq}`;
+            const formattedEmbedding =
+              dimensions > 0 && row.embedding.length > dimensions
+                ? truncateAndNormalizeEmbedding(row.embedding, dimensions)
+                : row.embedding;
             // sqlite-vec vec0 tables do not reliably support OR REPLACE semantics.
             // Delete first, then insert the fresh vector row.
             deleteVecChunkStmt.run(chunkId);
-            insertVecStmt.run(chunkId, encodeEmbedding(row.embedding));
+            insertVecStmt.run(chunkId, encodeEmbedding(formattedEmbedding));
           }
         })();
       } catch (e) {
@@ -286,11 +325,15 @@ export async function createVectorIndexPort(
       }
 
       try {
+        const formattedQuery =
+          dimensions > 0 && embedding.length > dimensions
+            ? truncateAndNormalizeEmbedding(embedding, dimensions)
+            : embedding;
         const variants = searchVectorVariants(
           db,
           model,
           dimensions,
-          embedding,
+          formattedQuery,
           k,
           searchOptions
         );
