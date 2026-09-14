@@ -14,6 +14,7 @@ import {
   createVectorIndexPort,
   decodeEmbedding,
   encodeEmbedding,
+  truncateAndNormalizeEmbedding,
 } from "../../../src/store/vector/sqlite-vec";
 import { safeRm } from "../../helpers/cleanup";
 
@@ -39,6 +40,14 @@ describe("encodeEmbedding/decodeEmbedding", () => {
     original[0] = 999;
     const decoded = decodeEmbedding(encoded);
     expect(decoded[0]).toBeCloseTo(1.0, 5);
+  });
+
+  test("truncates and L2-normalizes Float32Array correctly for Matryoshka learning", () => {
+    const original = new Float32Array([3.0, 4.0, 12.0, 0.0]);
+    const truncated = truncateAndNormalizeEmbedding(original, 2);
+    expect(truncated.length).toBe(2);
+    expect(truncated[0]).toBeCloseTo(0.6, 5); // 3 / sqrt(3^2 + 4^2) = 3 / 5
+    expect(truncated[1]).toBeCloseTo(0.8, 5); // 4 / 5
   });
 });
 

@@ -2460,6 +2460,46 @@ function wireManagementCommands(program: Command): void {
       });
     });
 
+  // vec migrate
+  addWriteLeaseFlags(
+    vecCmd
+      .command("migrate")
+      .description("Configure shadow partition for vector dimension migration")
+      .option("--model <uri>", "Model URI")
+      .option("--dimensions <number>", "Target vector dimensions", (val) => Number.parseInt(val, 10))
+      .option("--json", "JSON output")
+  ).action(async (cmdOpts: Record<string, unknown>) => {
+    const format = getFormat(cmdOpts);
+    const globals = getGlobals();
+
+    const { vecMigrate, formatVecMigrate } = await import("./commands/vec");
+    const lease = parseWriteLeaseFlags(cmdOpts);
+    const result = await withCliWriteLease(
+      {
+        indexName: globals.index,
+        lockWaitMs: lease.lockWaitMs,
+        noWait: lease.noWait,
+      },
+      () =>
+        vecMigrate({
+          model: typeof cmdOpts.model === "string" ? cmdOpts.model : undefined,
+          dimensions: typeof cmdOpts.dimensions === "number" && Number.isFinite(cmdOpts.dimensions) ? cmdOpts.dimensions : undefined,
+          configPath: globals.config,
+          indexName: globals.index,
+          json: format === "json",
+        })
+    );
+    throwIfWriteLeaseBusy(result, format === "json");
+
+    if (!result.success) {
+      throw new CliError("RUNTIME", result.error);
+    }
+
+    output(formatVecMigrate(result, { json: format === "json" }), {
+      json: format === "json",
+    });
+  });
+
   collectionCmd
     .command("remove <name>")
     .description("Remove a collection")

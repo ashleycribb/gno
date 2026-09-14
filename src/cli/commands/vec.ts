@@ -32,6 +32,20 @@ export type VecRebuildResult =
   | { success: true; count: number; model: string }
   | { success: false; error: string };
 
+export interface VecMigrateOptions extends VecOptions {
+  model?: string;
+  dimensions?: number;
+}
+
+export type VecMigrateResult =
+  | {
+      success: true;
+      model: string;
+      dimensions: number;
+      partitionId: string;
+    }
+  | { success: false; error: string };
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
@@ -293,4 +307,100 @@ export function formatVecRebuild(
   }
 
   return `Vec index rebuilt: ${result.count.toLocaleString()} vectors`;
+}
+
+/**
+ * Configure shadow partition for vector migration to a new model or Matryoshka dimension.
+ */
+export async function vecMigrate(
+  options: VecMigrateOptions = {}
+): Promise<VecMigrateResult> {
+  const initialized = await isInitialized(options.configPath);
+  if (!initialized) {
+    return { success: false, error: "GNO not initialized. Run: gno init" };
+  }
+
+  const configResult = await loadConfig(options.configPath);
+  if (!configResult.ok) {
+    return { success: false, error: configResult.error.message };
+  }
+  const config = configResult.value;
+
+  const preset = getActivePreset(config);
+  const modelUri = options.model ?? preset.embed;
+
+  const store = new SqliteAdapter();
+  const dbPath = getIndexDbPath(options.indexName);
+  const paths = getConfigPaths();
+  store.setConfigPath(paths.configFile);
+
+  const openResult = await store.open(
+    dbPath,
+    config.ftsTokenizer,
+    config.busyTimeoutMs
+  );
+  if (!openResult.ok) {
+    return { success: false, error: openResult.error.message };
+  }
+
+  try {
+    const db = store.getRawDb();
+    const dimensions =
+      options.dimensions ??
+      inferDimensions(db, modelUri) ??
+      preset.dimensions ??
+      1024;
+
+    const { createVectorVariantStore } = await import(
+      "../../store/vector/variants"
+    );
+    const variantStore = await createVectorVariantStore(db, {
+      model: modelUri,
+      modelFingerprint: "manual-migration",
+      contextSize: config.models?.expandContextSize ?? 2048,
+      truncationPolicy: "matryoshka",
+      dimensions,
+    });
+
+    variantStore.selectForEmbedding();
+
+    return {
+      success: true,
+      model: modelUri,
+      dimensions,
+      partitionId: variantStore.partitionId,
+    };
+  } catch (e) {
+    return {
+      success: false,
+      error: e instanceof Error ? e.message : String(e),
+    };
+  } finally {
+    await store.close();
+  }
+}
+
+export function formatVecMigrate(
+  result: VecMigrateResult,
+  options: VecMigrateOptions
+): string {
+  if (!result.success) {
+    return options.json
+      ? JSON.stringify({ error: { code: "RUNTIME", message: result.error } })
+      : `Error: ${result.error}`;
+  }
+
+  if (options.json) {
+    return JSON.stringify(
+      {
+        model: result.model,
+        dimensions: result.dimensions,
+        partitionId: result.partitionId,
+      },
+      null,
+      2
+    );
+  }
+
+  return `Vector partition configured for model ${result.model} (${result.dimensions} dimensions). Run 'gno embed --force' to populate shadow partition.`;
 }
